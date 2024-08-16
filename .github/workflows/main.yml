@@ -1,85 +1,97 @@
-name: Deploy Sock Shop Application on AKS with Monitoring and Let's Encrypt
+name: CI
 
 on:
   push:
-    branches:
-      - main
-      - 'release/*'
-    paths:
-      - my-app/**
+    branches: [ "main" ]
 
 jobs:
-  deploy-sock-shop:
+  terraform:
+    name: 'terraform'
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
     runs-on: ubuntu-latest
+    environment: dev
+
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v2
 
-    - name: Set up Kubectl
-      uses: azure/setup-kubectl@v3
-      with:
-        version: 'latest'
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: Azure Login
-      uses: azure/login@v1
-      with:
-        creds: |
-          {
-             "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
-             "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
-             "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}",
-             "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
-          }
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.1.7"
 
-    - name: Set up AKS context
-      run: |
-        az aks get-credentials --resource-group rg-novel-jackal  --name cluster-whole-mudfish
+      - name: Terraform format
+        run: terraform fmt
 
-    - name: Install ingress-nginx using Helm
-      run: |
-        helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-        helm repo update
-        helm install ingress-nginx ingress-nginx/ingress-nginx \
-          --namespace ingress-nginx --create-namespace
+      - name: Terraform init
+        run: terraform init
 
-    - name: Install Cert-Manager
-      run: |
-        kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.3/cert-manager.yaml
+      - name: Terraform validate
+        run: terraform validate
 
-    - name: Create Let's Encrypt Issuer
-      run: |
-        kubectl apply -f kubernetes/letsencrypt-issuer.yaml
+      - name: Terraform plan
+        run: terraform plan
 
-    - name: Install Prometheus using Helm
-      run: |
-        helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-        helm repo update
-        helm install prometheus prometheus-community/prometheus \
-          --namespace monitoring --create-namespace
+      - name: Terraform apply
+        run: terraform apply -auto-approve
 
-    - name: Install Grafana using Helm
-      run: |
-        helm repo add grafana https://grafana.github.io/helm-charts
-        helm repo update
-        helm install grafana grafana/grafana \
-          --namespace monitoring --create-namespace \
-          --set adminPassword=${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+      - name: Set up AKS context
+        run: az aks get-credentials --resource-group rg-novel-jackal --name cluster-whole-mudfish
 
-    - name: Install Alertmanager using Helm
-      run: |
-        helm install alertmanager prometheus-community/alertmanager \
-          --namespace monitoring
+      - name: Set up Kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
 
-    - name: Deploy Sock Shop Application
-      run: |
-        kubectl apply -f kubernetes/complete-demo.yaml
+      - name: Install ingress-nginx using Helm
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+          helm install ingress-nginx ingress-nginx/ingress-nginx --namespace ingress-nginx --create-namespace
 
-    - name: Create Ingress Resource with TLS
-      run: |
-        kubectl apply -f kubernetes/ingress-tls.yaml
+      - name: Install Cert-Manager
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.12.3/cert-manager.yaml
 
-    - name: Verify Installations
-      run: |
-        kubectl get pods -n ingress-nginx
-        kubectl get pods -n monitoring
-        kubectl get pods -n sock-shop
+      - name: Create Let's Encrypt Issuer
+        run: kubectl apply -f tony-capstone/my-app/templates/cluster-issuer.yaml
+
+      - name: Install Prometheus using Helm
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo update
+          helm install prometheus prometheus-community/prometheus --namespace monitoring --create-namespace
+
+      - name: Install Grafana using Helm
+        run: |
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+          helm install grafana grafana/grafana --namespace monitoring --create-namespace --set adminPassword=${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+
+      - name: Install Alertmanager using Helm
+        run: |
+          helm install alertmanager prometheus-community/alertmanager --namespace monitoring
+
+      - name: Deploy Sock Shop Application
+        run: kubectl apply -f tony-capstone/my-app/templates/complete-demo.yaml
+
+      - name: Create Ingress Resource with TLS
+        run: kubectl apply -f tony-capstone/my-app/templates/main-ingress.yaml
+
+      - name: certificate Application
+        run: kubectl apply -f tony-capstone/my-app/templates/certificate.yaml
+
+      - name: Verify Installations
+        run: |
+          kubectl get pods -n ingress-nginx
+          kubectl get pods -n monitoring
+          kubectl get pods -n sock-shop
